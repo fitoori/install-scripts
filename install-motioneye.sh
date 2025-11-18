@@ -30,9 +30,11 @@ readonly ME_CONF="$ME_CONF_DIR/motioneye.conf"
 readonly ME_MEDIA="/var/lib/motioneye"
 readonly ME_LOG="/var/log/motioneye"
 readonly ME_SERVICE="/etc/systemd/system/motioneye.service"
+readonly ME_LOGROTATE="/etc/logrotate.d/motioneye"
 readonly ME_PORT="8765"
 readonly NEED_PRE="${ME_PRE:-1}"
-readonly WANT_UPGRADE="${ME_UPGRADE:-0}"
+readonly WANT_UPGRADE="${ME_UPGRADE:-1}"
+readonly WANT_REINSTALL="${ME_REINSTALL:-0}"
 
 #---- OS / pkg manager detection
 if [[ -r /etc/os-release ]]; then . /etc/os-release; fi
@@ -135,22 +137,60 @@ install -d -o "$ME_USER" -g "$ME_GROUP" -m 0750 "$ME_LOG"
 install -d -o root     -g root       -m 0755 "$ME_CONF_DIR"
 
 #---- Python venv + motionEye install
-if [[ ! -x "$ME_VENV/bin/python3" ]]; then
-  log "Creating virtualenv at $ME_VENV"
-  python3 -m venv "$ME_VENV"
-fi
+ensure_venv() {
+  if [[ -x "$ME_VENV/bin/python3" ]]; then
+    if ! "$ME_VENV/bin/python3" - <<'PY'; then
+import sys
+import sysconfig
+assert sys.prefix, "Missing venv prefix"
+assert sysconfig.get_paths().get("purelib"), "Missing site-packages"
+PY
+      warn "Existing motionEye venv is broken; recreating at $ME_VENV"
+      rm -rf "$ME_VENV"
+    fi
+  fi
+
+  if [[ ! -x "$ME_VENV/bin/python3" ]]; then
+    log "Creating virtualenv at $ME_VENV"
+    python3 -m venv "$ME_VENV"
+  fi
+}
+ensure_venv
 "$ME_VENV/bin/python" -m pip --version >/dev/null 2>&1 || "$ME_VENV/bin/python" -m ensurepip --upgrade
 "$ME_VENV/bin/python" -m pip install --upgrade --disable-pip-version-check pip setuptools wheel
 
 PIP_FLAGS=()
 (( NEED_PRE == 1 )) && PIP_FLAGS+=(--pre)
-if "$ME_VENV/bin/python" -m pip show motioneye >/dev/null 2>&1; then
-  log "motionEye already installed."
-  (( WANT_UPGRADE == 1 )) && "$ME_VENV/bin/python" -m pip install "${PIP_FLAGS[@]}" --upgrade motioneye
+
+PIP_REPAIR_FLAGS=()
+HAS_MOTION=0
+if "$ME_VENV/bin/python" -m pip show motioneye >/dev/null 2>&1; then HAS_MOTION=1; fi
+if (( HAS_MOTION == 1 )); then
+  if [[ ! -x "$ME_VENV/bin/meyectl" ]]; then
+    warn "motionEye install missing meyectl; will force reinstall."
+    PIP_REPAIR_FLAGS+=(--force-reinstall)
+  fi
+fi
+if (( WANT_REINSTALL == 1 )); then
+  log "ME_REINSTALL=1 requested; forcing reinstall of motionEye."
+  PIP_REPAIR_FLAGS+=(--force-reinstall)
+fi
+
+if (( HAS_MOTION == 1 )); then
+  log "motionEye already installed; ensuring it is up to date."
+  if (( WANT_UPGRADE == 1 )); then
+    "$ME_VENV/bin/python" -m pip install "${PIP_FLAGS[@]}" "${PIP_REPAIR_FLAGS[@]}" --upgrade motioneye
+  else
+    log "Skipping motionEye upgrade (ME_UPGRADE=0)."
+  fi
 else
   log "Installing motionEye..."
   "$ME_VENV/bin/python" -m pip install "${PIP_FLAGS[@]}" motioneye
 fi
+
+INSTALLED_VER="$("$ME_VENV/bin/python" -m pip show motioneye 2>/dev/null | awk -F': ' '/^Version/{print $2}')"
+[[ -n "$INSTALLED_VER" ]] && log "motionEye version: $INSTALLED_VER"
+"$ME_VENV/bin/python" -m pip check >/dev/null 2>&1 || warn "Detected Python package conflicts; reinstall with ME_REINSTALL=1 if issues persist."
 
 #---- Default config if missing
 if [[ ! -f "$ME_CONF" ]]; then
@@ -205,6 +245,35 @@ if [[ ! -f "$ME_SERVICE" ]] || ! diff -q <(printf "%s" "$UNIT_CONTENT") "$ME_SER
   chmod 0644 "$ME_SERVICE"
 fi
 systemctl daemon-reload
+
+#---- logrotate integration
+ensure_logrotate() {
+  local sample=""
+  for p in "$ME_VENV"/lib/python*/site-packages/motioneye/extra/motioneye.logrotate \
+           /usr/share/motioneye/extra/motioneye.logrotate \
+           /usr/local/share/motioneye/extra/motioneye.logrotate; do
+    [[ -f "$p" ]] && sample="$p" && break
+  done
+
+  if [[ -n "$sample" ]]; then
+    log "Installing logrotate policy from official sample ($sample)."
+    sed "s|/var/log/motioneye|$ME_LOG|g" "$sample" >"$ME_LOGROTATE"
+  else
+    cat >"$ME_LOGROTATE" <<ROTATE
+$ME_LOG/*.log {
+  daily
+  missingok
+  rotate 7
+  compress
+  delaycompress
+  notifempty
+  copytruncate
+  create 0640 $ME_USER $ME_GROUP
+}
+ROTATE
+  fi
+}
+ensure_logrotate
 
 #---- Incorporate: robust permission fixer (adapted to venv/systemd)
 fix_motioneye_perms() {
