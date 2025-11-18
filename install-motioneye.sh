@@ -33,7 +33,7 @@ readonly ME_SERVICE="/etc/systemd/system/motioneye.service"
 readonly ME_LOGROTATE="/etc/logrotate.d/motioneye"
 readonly ME_PORT="8765"
 readonly NEED_PRE="${ME_PRE:-1}"
-readonly WANT_UPGRADE="${ME_UPGRADE:-0}"
+readonly WANT_UPGRADE="${ME_UPGRADE:-1}"
 
 #---- OS / pkg manager detection
 if [[ -r /etc/os-release ]]; then . /etc/os-release; fi
@@ -146,8 +146,12 @@ fi
 PIP_FLAGS=()
 (( NEED_PRE == 1 )) && PIP_FLAGS+=(--pre)
 if "$ME_VENV/bin/python" -m pip show motioneye >/dev/null 2>&1; then
-  log "motionEye already installed."
-  (( WANT_UPGRADE == 1 )) && "$ME_VENV/bin/python" -m pip install "${PIP_FLAGS[@]}" --upgrade motioneye
+  log "motionEye already installed; ensuring it is up to date."
+  if (( WANT_UPGRADE == 1 )); then
+    "$ME_VENV/bin/python" -m pip install "${PIP_FLAGS[@]}" --upgrade motioneye
+  else
+    log "Skipping motionEye upgrade (ME_UPGRADE=0)."
+  fi
 else
   log "Installing motionEye..."
   "$ME_VENV/bin/python" -m pip install "${PIP_FLAGS[@]}" motioneye
