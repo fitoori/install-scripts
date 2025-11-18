@@ -30,6 +30,7 @@ readonly ME_CONF="$ME_CONF_DIR/motioneye.conf"
 readonly ME_MEDIA="/var/lib/motioneye"
 readonly ME_LOG="/var/log/motioneye"
 readonly ME_SERVICE="/etc/systemd/system/motioneye.service"
+readonly ME_LOGROTATE="/etc/logrotate.d/motioneye"
 readonly ME_PORT="8765"
 readonly NEED_PRE="${ME_PRE:-1}"
 readonly WANT_UPGRADE="${ME_UPGRADE:-0}"
@@ -152,6 +153,9 @@ else
   "$ME_VENV/bin/python" -m pip install "${PIP_FLAGS[@]}" motioneye
 fi
 
+INSTALLED_VER="$("$ME_VENV/bin/python" -m pip show motioneye 2>/dev/null | awk -F': ' '/^Version/{print $2}')"
+[[ -n "$INSTALLED_VER" ]] && log "motionEye version: $INSTALLED_VER"
+
 #---- Default config if missing
 if [[ ! -f "$ME_CONF" ]]; then
   cat >"$ME_CONF" <<CONF
@@ -205,6 +209,23 @@ if [[ ! -f "$ME_SERVICE" ]] || ! diff -q <(printf "%s" "$UNIT_CONTENT") "$ME_SER
   chmod 0644 "$ME_SERVICE"
 fi
 systemctl daemon-reload
+
+#---- logrotate integration
+ensure_logrotate() {
+  cat >"$ME_LOGROTATE" <<ROTATE
+$ME_LOG/*.log {
+  daily
+  missingok
+  rotate 7
+  compress
+  delaycompress
+  notifempty
+  copytruncate
+  create 0640 $ME_USER $ME_GROUP
+}
+ROTATE
+}
+ensure_logrotate
 
 #---- Incorporate: robust permission fixer (adapted to venv/systemd)
 fix_motioneye_perms() {
