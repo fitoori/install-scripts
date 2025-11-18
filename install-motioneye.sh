@@ -216,6 +216,18 @@ systemctl daemon-reload
 
 #---- logrotate integration
 ensure_logrotate() {
+  local logrotate_dir
+  logrotate_dir="$(dirname "$ME_LOGROTATE")"
+
+  if command -v logrotate >/dev/null 2>&1; then
+    install -d -m 0755 -o root -g root "$logrotate_dir"
+  elif [[ -d "$logrotate_dir" ]]; then
+    :
+  else
+    warn "logrotate not installed; skipping configuration at $ME_LOGROTATE"
+    return
+  fi
+
   cat >"$ME_LOGROTATE" <<ROTATE
 $ME_LOG/*.log {
   daily
