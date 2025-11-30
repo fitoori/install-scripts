@@ -156,12 +156,13 @@ PY
   fi
 }
 ensure_venv
-fix_venv_perms() {
-  # The service runs as $ME_USER; ensure the venv is traversable/readable by that user.
-  chown -R root:"$ME_GROUP" "$ME_VENV"
-  chmod -R g+rX "$ME_VENV"
-  chmod -R o-rwx "$ME_VENV"
-}
+  fix_venv_perms() {
+    # The service runs as $ME_USER; ensure the venv is traversable/readable by that user.
+    # Use -h to avoid following venv symlinks (e.g., bin/python* -> system python)
+    chown -hR root:"$ME_GROUP" "$ME_VENV"
+    chmod -R g+rX "$ME_VENV"
+    chmod -R o-rwx "$ME_VENV"
+  }
 fix_venv_perms
 "$ME_VENV/bin/python" -m pip --version >/dev/null 2>&1 || "$ME_VENV/bin/python" -m ensurepip --upgrade
 "$ME_VENV/bin/python" -m pip install --upgrade --disable-pip-version-check pip setuptools wheel
