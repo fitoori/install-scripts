@@ -112,11 +112,11 @@ main() {
         python3-dev \
         python3-venv \
         python3-pip \
-        libatlas-base-dev \
         libglib2.0-0 \
         libgl1
 
     apt_maybe_install \
+        libatlas-base-dev \
         python3-lxml \
         python3-opencv
 
